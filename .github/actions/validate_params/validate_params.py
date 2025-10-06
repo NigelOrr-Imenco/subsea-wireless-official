@@ -6,7 +6,10 @@ from tabulate import tabulate
 from collections import Counter
 import argparse
 
+ID_UNASSIGNED = 255    # Set to a number that is within limits of JSON schema but not used (e.g. maximum value). Can be used to trigger automatic numbering
+
 def main():
+    rewrite_data = False    # Set to true if rewrite_ parameter specified and overwrite is required
     overall_pass = True
 
     parser = argparse.ArgumentParser(
@@ -39,6 +42,16 @@ def main():
     parser.add_argument(
         "--csv_file",
         help="Path to the CSV file to be generated from the parameters after successful validation"
+    )
+    parser.add_argument(
+        "--rewrite_default_access",
+        action="store_true",
+        help="Rewrite the specified parameter file with default access added to any parameters where no access is specified"
+    )
+    parser.add_argument(
+        "--rewrite_auto_number_id",
+        action="store_true",
+        help=F"Rewrite the specified parameter file with automatically assigned ID number for IDs currently set to {ID_UNASSIGNED}"
     )
 
     args = parser.parse_args()
@@ -83,11 +96,23 @@ def main():
     custom_test_rows = []   # List of reports
     cleaned_data = [] # Store for clean subset of parameters to allow subsequent testing
 
-    # Check for duplicate IDs
-    id_duplicates = []
     custom_pass = True
+
+    # Per-parameter tests
+    for param in data:
+        if 'access' not in param:
+            if args.rewrite_default_access:
+                print(F"Adding default readonly access for {param['id']}:{param['description']}")
+                param['access']={"dry": {"read": True}, "wet": {"read": True}}
+                rewrite_data = True
+            else:
+                custom_test_rows.append([F"No access specified for parameter {param['id']}:{param['description']}", "FAIL"])
+
+    # Parameter global tests
+    # Check for duplicate IDs, rewrite if specified
+    id_duplicates = []
     ids = []
-    
+
     try:
         ids = [int(param['id']) for param in data]  # Schema guarantees all should be integers
     except:
@@ -102,6 +127,17 @@ def main():
         custom_pass = False
 
     id_counts = Counter(ids)
+    if args.rewrite_auto_number_id and ID_UNASSIGNED in id_counts.keys():
+        del id_counts[ID_UNASSIGNED]    # Remove the placeholder from the list before getting the highest value
+        last_id = max(id_counts.keys()) + 1
+        print(F"\n### Auto-renumbering from {ID_UNASSIGNED} to new IDs starting at {last_id}")
+
+        for param in data:
+            if param['id'] == ID_UNASSIGNED:
+                param['id'] = last_id
+                last_id += 1
+        rewrite_data = True
+
     id_duplicates = [id_ for id_, count in id_counts.items() if count > 1]
     for duplicate in id_duplicates:
         custom_test_rows.append([F"Duplicate ID {duplicate}", "FAIL"])
@@ -123,11 +159,16 @@ def main():
         print(F"✅ Custom tests pass")
 
     if overall_pass:            
-        print("\n### Success - Statistics")
+        ids = [int(param['id']) for param in data]  # All tests passed so all should be valid integers
         print(F"  - Parameters defined: {len(ids)}")
         print(F"  - Highest ID defined: {max(ids)} ")
     else:
         sys.exit(1)
+
+    if rewrite_data:
+        print(F"Overwriting {args.file}")
+        with open(args.file, "w") as fp:
+            json.dump({"all":data} , fp, indent = 4) 
 
     data.sort(key=lambda x: int(x['id'])) # Sort by integer ID before outputting other formats
 
@@ -197,7 +238,7 @@ message Message{
                                     "Dry Access","Wet Access","Optionals"]))
 
     if args.csv_file:
-        with open("parameters.csv", "w", newline="", encoding="utf-8") as csvfile:
+        with open(args.csv_file, "w", newline="", encoding="utf-8") as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow([
                 "ID", "Name", "Description", "Representation", 
@@ -236,8 +277,9 @@ message Message{
                     f'{access["wet"]["write"]}',
                     ", ".join(f"{k.capitalize()} " for k,v in p.get("optional", {}).items()) if "optional" in p else ""
                 ])
-        print("\n### CSV File")
-        print(F"Generated {args.csv_file} from {args.file}")
+        if args.csv_file:
+            print("\n### CSV File")
+            print(F"Generated {args.csv_file} from {args.file}")
 
 
 if __name__ == "__main__":

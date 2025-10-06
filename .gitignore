@@ -2,3 +2,4 @@ python/__pycache__/
 csv_to_json/compare.csv
 csv_to_json/parameters.json
 parameters.csv
+delete*
